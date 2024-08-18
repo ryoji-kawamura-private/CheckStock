@@ -80,36 +80,34 @@ namespace CheckStock
 
 			var currentValue = default(string);
 			var previousValue = default(string);
+			var browser = await Puppeteer.LaunchAsync(new LaunchOptions { Headless = true, ExecutablePath = ConfigurationManager.AppSettings["ChromePath"] });
 
 			while (true)
 			{
 				Console.WriteLine(url);
 				try
 				{
-					using (var browser = await Puppeteer.LaunchAsync(new LaunchOptions { Headless = true, ExecutablePath = ConfigurationManager.AppSettings["ChromePath"] }))
+					using (var page = await browser.NewPageAsync())
 					{
-						using (var page = await browser.NewPageAsync())
+						await page.GoToAsync(url);
+						await Task.Delay(5000);
+						var content = await page.GetContentAsync();
+						using (var context = BrowsingContext.New(AngleSharp.Configuration.Default))
+						using (var document = await context.OpenAsync(req => req.Content(content)))
 						{
-							await page.GoToAsync(url);
-							await Task.Delay(4000);
-							var content = await page.GetContentAsync();
-							using (var context = BrowsingContext.New(AngleSharp.Configuration.Default))
-							using (var document = await context.OpenAsync(req => req.Content(content)))
-							{
-								// 特定の要素を取得する
-								var elements = document.QuerySelectorAll(cssSelector); // クラス名に応じて変更
-								if (elements.Any())
-									currentValue = elements.ElementAt(0).InnerHtml;
-							}
-							await page.CloseAsync();
+							// 特定の要素を取得する
+							var elements = document.QuerySelectorAll(cssSelector); // クラス名に応じて変更
+							if (elements.Any())
+								currentValue = elements.ElementAt(0).InnerHtml;
 						}
-						await browser.CloseAsync();
+						await page.CloseAsync();
 					}
 				}
 				catch (Exception ex)
 				{
 					Console.WriteLine("リクエストエラー" + ex + "\r\n" + url);
-					currentValue = ex.Message;
+					currentValue = default(string);
+					previousValue = default(string);
 					continue;
 				}
 				finally
@@ -121,7 +119,7 @@ namespace CheckStock
 
 					var seed = Environment.TickCount;
 					var rnd = new Random(seed++);
-					await Task.Delay(rnd.Next(1000, 11000));
+					await Task.Delay(rnd.Next(1000, 6000));
 				}
 			}
 		}
