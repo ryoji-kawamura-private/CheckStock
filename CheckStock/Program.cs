@@ -71,15 +71,14 @@ namespace CheckStock
 
 			foreach (UrlElement urlElement in PollingUrlSettings.Urls)
 			{
-				_ = CheckStockAsync(urlElement.Url, urlElement.CssSelector);
+				_ = CheckStockAsync(urlElement.Url, urlElement.CssSelector, urlElement.IncludeWord);
 			}
 		}
 
-		private static async Task CheckStockAsync(string url, string cssSelector)
+		private static async Task CheckStockAsync(string url, string cssSelector, string includeWord)
 		{
 
 			var currentValue = default(string);
-			var previousValue = default(string);
 			var browser = await Puppeteer.LaunchAsync(new LaunchOptions { Headless = true, ExecutablePath = ConfigurationManager.AppSettings["ChromePath"] });
 
 			while (true)
@@ -107,19 +106,16 @@ namespace CheckStock
 				{
 					Console.WriteLine("リクエストエラー" + ex + "\r\n" + url);
 					currentValue = default(string);
-					previousValue = default(string);
 					continue;
 				}
 				finally
 				{
 
-					if (previousValue != null && currentValue != previousValue)
+					if (!currentValue.Contains(includeWord))
+					{
+						Log($"CurrentValue:{currentValue}");
 						await SendDiscord(url);
-					previousValue = currentValue;
-
-					var seed = Environment.TickCount;
-					var rnd = new Random(seed++);
-					await Task.Delay(rnd.Next(1000, 6000));
+					}
 				}
 			}
 		}
@@ -146,6 +142,36 @@ namespace CheckStock
 		{
 			Console.WriteLine(msg.ToString());
 			return Task.CompletedTask;
+		}
+
+		private static void Log(string msg)
+		{
+			const string directoryPath = @".\Logs\";
+			try
+			{
+				// ディレクトリが存在しない場合は作成
+				if (!Directory.Exists(directoryPath))
+				{
+					Directory.CreateDirectory(directoryPath);
+				}
+
+				// ファイル名を生成
+				var fileName = Path.Combine(directoryPath, DateTime.Now.ToString("yyyyMMdd") + ".log");
+
+				// メッセージにタイムスタンプを追加
+				var logEntry = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " " + msg + Environment.NewLine;
+
+				// ファイルにメッセージを追記
+				File.AppendAllText(fileName, logEntry);
+
+				// コンソールにも出力
+				Console.WriteLine(logEntry);
+			}
+			catch (Exception ex)
+			{
+				// 例外処理（ログの書き込みに失敗した場合）
+				Console.Error.WriteLine("Logging failed: " + ex.Message);
+			}
 		}
 	}
 }

@@ -32,6 +32,13 @@ namespace CheckStock
 			get { return (string)this["cssSelector"]; }
 			set { this["cssSelector"] = value; }
 		}
+
+		[ConfigurationProperty("includeWord", IsRequired = true)]
+		public string IncludeWord
+		{
+			get { return (string)this["includeWord"]; }
+			set { this["includeWord"] = value; }
+		}
 	}
 	public class UrlCollection : ConfigurationElementCollection
 	{
