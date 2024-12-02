@@ -71,16 +71,15 @@ namespace CheckStock
 
 			foreach (UrlElement urlElement in PollingUrlSettings.Urls)
 			{
-				_ = CheckStockAsync(urlElement.Url, urlElement.CssSelector, urlElement.IncludeWord);
+				_ = CheckStockAsync(urlElement.Url, urlElement.Selector, urlElement.ExcludeWord, urlElement.IncludeWord, urlElement.Headless);
 			}
 		}
 
-		private static async Task CheckStockAsync(string url, string cssSelector, string includeWord)
+		private static async Task CheckStockAsync(string url, string selector, string excludeWord, string includeWord, bool headeless)
 		{
 
-			var currentValue = default(string);
-			var browser = await Puppeteer.LaunchAsync(new LaunchOptions { Headless = true, ExecutablePath = ConfigurationManager.AppSettings["ChromePath"] });
 
+			var browser = await Puppeteer.LaunchAsync(new LaunchOptions { Headless = headeless, ExecutablePath = ConfigurationManager.AppSettings["ChromePath"], Args = new[] { "--window-size=200,100" }, });
 			while (true)
 			{
 				Console.WriteLine(url);
@@ -88,34 +87,43 @@ namespace CheckStock
 				{
 					using (var page = await browser.NewPageAsync())
 					{
-						await page.GoToAsync(url);
+						var response = await page.GoToAsync(url, new NavigationOptions
+						{
+							Timeout = 60000, // 1分
+						});
+						var headers = response.Headers;
+						headers["content-type"] = "utf-8";
 						await Task.Delay(5000);
 						var content = await page.GetContentAsync();
-						using (var context = BrowsingContext.New(AngleSharp.Configuration.Default))
-						using (var document = await context.OpenAsync(req => req.Content(content)))
-						{
-							// 特定の要素を取得する
-							var elements = document.QuerySelectorAll(cssSelector); // クラス名に応じて変更
-							if (elements.Any())
-								currentValue = elements.ElementAt(0).InnerHtml;
-						}
 						await page.CloseAsync();
+						using (var context = BrowsingContext.New(AngleSharp.Configuration.Default))
+						using (var document = await context.OpenAsync(req => req.Content(content).Header("Content-Type", "text/html; charset=utf-8")))
+						{
+							var elements = document.QuerySelectorAll(selector);
+							if (elements.Any())
+							{
+								var currentValue = elements.ElementAt(0).InnerHtml;
+								if (!string.IsNullOrEmpty(excludeWord) && (!currentValue.Contains(excludeWord)) || (!string.IsNullOrEmpty(includeWord) && currentValue.Contains(includeWord)))
+								{
+									Log($"CurrentValue:{currentValue}");
+									await SendDiscord(url);
+								}
+
+							}
+							else
+							{
+								Console.WriteLine(url);
+								Console.WriteLine(document.Body.InnerHtml);
+							}
+						}
 					}
 				}
 				catch (Exception ex)
 				{
-					Console.WriteLine("リクエストエラー" + ex + "\r\n" + url);
-					currentValue = default(string);
+					await browser.CloseAsync();
+					browser = await Puppeteer.LaunchAsync(new LaunchOptions { Headless = headeless, ExecutablePath = ConfigurationManager.AppSettings["ChromePath"], Args = new[] { "--window-size=200,100" }, });
+					Console.WriteLine("リクエストエラー" + "\r\n" + url + "\r\n" + ex);
 					continue;
-				}
-				finally
-				{
-
-					if (!currentValue.Contains(includeWord))
-					{
-						Log($"CurrentValue:{currentValue}");
-						await SendDiscord(url);
-					}
 				}
 			}
 		}

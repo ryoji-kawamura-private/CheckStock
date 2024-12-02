@@ -26,18 +26,32 @@ namespace CheckStock
 			set { this["url"] = value; }
 		}
 
-		[ConfigurationProperty("cssSelector", IsRequired = true)]
-		public string CssSelector
+		[ConfigurationProperty("selector", IsRequired = true)]
+		public string Selector
 		{
-			get { return (string)this["cssSelector"]; }
-			set { this["cssSelector"] = value; }
+			get { return (string)this["selector"]; }
+			set { this["selector"] = value; }
 		}
 
-		[ConfigurationProperty("includeWord", IsRequired = true)]
+		[ConfigurationProperty("excludeWord", IsRequired = false)]
+		public string ExcludeWord
+		{
+			get { return (string)this["excludeWord"]; }
+			set { this["excludeWord"] = value; }
+		}
+
+		[ConfigurationProperty("includeWord", IsRequired = false)]
 		public string IncludeWord
 		{
 			get { return (string)this["includeWord"]; }
 			set { this["includeWord"] = value; }
+		}
+
+		[ConfigurationProperty("headless", IsRequired = true)]
+		public bool Headless
+		{
+			get { return (bool)this["headless"]; }
+			set { this["headless"] = value; }
 		}
 	}
 	public class UrlCollection : ConfigurationElementCollection
