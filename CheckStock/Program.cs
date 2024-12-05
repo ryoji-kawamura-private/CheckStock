@@ -12,6 +12,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace CheckStock
@@ -22,10 +23,13 @@ namespace CheckStock
 		private static PollingUrlSettings PollingUrlSettings { get; } = (PollingUrlSettings)ConfigurationManager.GetSection("PollingUrlSettings");
 		private static DiscordSocketClient DiscordClient { get; set; }
 		private static SocketGuildUser[] GuildUsers { get; set; }
+		private static SemaphoreSlim Semaphore { get; } = new SemaphoreSlim(2); // 同時実行数を5に設定
+		private static IBrowser Browser { get; set; }
 
 
 		static async Task Main(string[] args)
 		{
+			Browser = await Puppeteer.LaunchAsync(new LaunchOptions { Headless = true, ExecutablePath = ConfigurationManager.AppSettings["ChromePath"], Args = new[] { "--disable-blink-features=AutomationControlled" }, });
 			DiscordClient = await GetDiscordClientAsync();
 			DiscordClient.Ready += OnReadyAsync;
 			await Task.Delay(-1);
@@ -71,59 +75,66 @@ namespace CheckStock
 
 			foreach (UrlElement urlElement in PollingUrlSettings.Urls)
 			{
-				_ = CheckStockAsync(urlElement.Url, urlElement.Selector, urlElement.ExcludeWord, urlElement.IncludeWord, urlElement.Headless);
+				_ = CheckStockAsync(urlElement.Url, urlElement.Selector, urlElement.ExcludeWord, urlElement.IncludeWord);
 			}
 		}
 
-		private static async Task CheckStockAsync(string url, string selector, string excludeWord, string includeWord, bool headeless)
+		private static async Task CheckStockAsync(string url, string selector, string excludeWord, string includeWord)
 		{
-
-
-			var browser = await Puppeteer.LaunchAsync(new LaunchOptions { Headless = headeless, ExecutablePath = ConfigurationManager.AppSettings["ChromePath"], Args = new[] { "--window-size=200,100" }, });
 			while (true)
 			{
+				await Semaphore.WaitAsync(); // セマフォでリソースを確保
 				Console.WriteLine(url);
 				try
 				{
-					using (var page = await browser.NewPageAsync())
+					using (var page = await Browser.NewPageAsync())
 					{
-						var response = await page.GoToAsync(url, new NavigationOptions
+						try
 						{
-							Timeout = 60000, // 1分
-						});
-						var headers = response.Headers;
-						headers["content-type"] = "utf-8";
-						await Task.Delay(5000);
-						var content = await page.GetContentAsync();
-						await page.CloseAsync();
-						using (var context = BrowsingContext.New(AngleSharp.Configuration.Default))
-						using (var document = await context.OpenAsync(req => req.Content(content).Header("Content-Type", "text/html; charset=utf-8")))
-						{
-							var elements = document.QuerySelectorAll(selector);
-							if (elements.Any())
+							var userAgent = await page.EvaluateExpressionAsync<string>("navigator.userAgent");
+							userAgent = userAgent.Replace("Headless", "");
+							await page.SetUserAgentAsync(userAgent);
+							var response = await page.GoToAsync(url, new NavigationOptions
 							{
-								var currentValue = elements.ElementAt(0).InnerHtml;
-								if (!string.IsNullOrEmpty(excludeWord) && (!currentValue.Contains(excludeWord)) || (!string.IsNullOrEmpty(includeWord) && currentValue.Contains(includeWord)))
+								Timeout = 60000, // 1分
+							});
+							var headers = response.Headers;
+							headers["content-type"] = "utf-8";
+							await Task.Delay(1500);
+							var content = await page.GetContentAsync();
+							await page.CloseAsync();
+							using (var context = BrowsingContext.New(AngleSharp.Configuration.Default))
+							using (var document = await context.OpenAsync(req => req.Content(content).Header("Content-Type", "text/html; charset=utf-8")))
+							{
+								var elements = document.QuerySelectorAll(selector);
+								if (elements.Any())
 								{
-									Log($"CurrentValue:{currentValue}");
-									await SendDiscord(url);
+									var currentValue = elements.ElementAt(0).InnerHtml;
+									if (!string.IsNullOrEmpty(excludeWord) && (!currentValue.Contains(excludeWord)) || (!string.IsNullOrEmpty(includeWord) && currentValue.Contains(includeWord)))
+									{
+										Log($"CurrentValue:{currentValue}");
+										await SendDiscord(url);
+									}
 								}
-
 							}
-							else
-							{
-								Console.WriteLine(url);
-								Console.WriteLine(document.Body.InnerHtml);
-							}
+						}
+						finally
+						{
+							await page.CloseAsync();
 						}
 					}
 				}
 				catch (Exception ex)
 				{
-					await browser.CloseAsync();
-					browser = await Puppeteer.LaunchAsync(new LaunchOptions { Headless = headeless, ExecutablePath = ConfigurationManager.AppSettings["ChromePath"], Args = new[] { "--window-size=200,100" }, });
+					//await Browser.CloseAsync();
+					//Browser = await Puppeteer.LaunchAsync(new LaunchOptions { Headless = false, ExecutablePath = ConfigurationManager.AppSettings["ChromePath"], Args = new[] { "--window-size=200,100" }, });
 					Console.WriteLine("リクエストエラー" + "\r\n" + url + "\r\n" + ex);
 					continue;
+				}
+				finally
+				{
+					Semaphore.Release();
+					await Task.Delay(2000);
 				}
 			}
 		}

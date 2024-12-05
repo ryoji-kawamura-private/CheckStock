@@ -46,13 +46,6 @@ namespace CheckStock
 			get { return (string)this["includeWord"]; }
 			set { this["includeWord"] = value; }
 		}
-
-		[ConfigurationProperty("headless", IsRequired = true)]
-		public bool Headless
-		{
-			get { return (bool)this["headless"]; }
-			set { this["headless"] = value; }
-		}
 	}
 	public class UrlCollection : ConfigurationElementCollection
 	{
