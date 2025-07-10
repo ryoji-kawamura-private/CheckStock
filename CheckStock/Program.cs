@@ -1,17 +1,13 @@
 ﻿using AngleSharp;
-using AngleSharp.Html.Dom;
-using AngleSharp.Html.Parser;
 using Discord;
 using Discord.WebSocket;
 using PuppeteerSharp;
 using System;
-using System.Collections.Generic;
 using System.Configuration;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Net.Http;
-using System.Net.Http.Headers;
+using System.Management;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -23,8 +19,8 @@ namespace CheckStock
 		private static PollingUrlSettings PollingUrlSettings { get; } = (PollingUrlSettings)ConfigurationManager.GetSection("PollingUrlSettings");
 		private static DiscordSocketClient DiscordClient { get; set; }
 		private static SocketGuildUser[] GuildUsers { get; set; }
-		private static SemaphoreSlim Semaphore { get; } = new SemaphoreSlim(2); // 同時実行数を2に設定
-
+		private static SemaphoreSlim Semaphore { get; } = new SemaphoreSlim(3); // 同時実行数を3に設定
+		private static string ProfileDir { get; } = Path.Combine(Path.GetTempPath(), "puppeteer_");
 
 		static async Task Main(string[] args)
 		{
@@ -71,6 +67,8 @@ namespace CheckStock
 				throw new Exception("Discord User not found.");
 			}
 
+			KillChromeProcesses();
+
 			foreach (UrlElement urlElement in PollingUrlSettings.Urls)
 			{
 				_ = CheckStockAsync(urlElement.Url, urlElement.Selector, urlElement.ExcludeWord, urlElement.IncludeWord);
@@ -82,7 +80,8 @@ namespace CheckStock
 			while (true)
 			{
 				await Semaphore.WaitAsync(); // セマフォでリソースを確保
-				using (var Browser = await Puppeteer.LaunchAsync(new LaunchOptions { Headless = true, ExecutablePath = ConfigurationManager.AppSettings["ChromePath"], Args = new[] { "--disable-blink-features=AutomationControlled" }, }))
+				var sendedDiscord = false;
+				using (var Browser = await Puppeteer.LaunchAsync(new LaunchOptions { Headless = true, ExecutablePath = ConfigurationManager.AppSettings["ChromePath"], Args = new[] { "--disable-blink-features=AutomationControlled" }, UserDataDir = ProfileDir + Guid.NewGuid() }))
 				{
 					Console.WriteLine(url);
 					try
@@ -111,10 +110,11 @@ namespace CheckStock
 									if (elements.Any())
 									{
 										var currentValue = elements.ElementAt(0).InnerHtml;
-										if (!string.IsNullOrEmpty(excludeWord) && (!currentValue.Contains(excludeWord)) || (!string.IsNullOrEmpty(includeWord) && currentValue.Contains(includeWord)))
+										if (!string.IsNullOrEmpty(excludeWord) && (!currentValue.Contains(excludeWord)) || (!string.IsNullOrEmpty(includeWord) && currentValue.IndexOf(includeWord, StringComparison.OrdinalIgnoreCase) >= 0))
 										{
 											Log($"CurrentValue:{currentValue}");
 											await SendDiscord(url);
+											sendedDiscord = true;
 										}
 									}
 									else
@@ -139,6 +139,10 @@ namespace CheckStock
 						await Browser.CloseAsync();
 						Semaphore.Release();
 					}
+				}
+				if (sendedDiscord)
+				{
+					await Task.Delay(300000);
 				}
 			}
 		}
@@ -194,6 +198,47 @@ namespace CheckStock
 			{
 				// 例外処理（ログの書き込みに失敗した場合）
 				Console.Error.WriteLine("Logging failed: " + ex.Message);
+			}
+		}
+		private static void KillChromeProcesses()
+		{
+
+			foreach (var proc in Process.GetProcessesByName("chrome"))
+			{
+				try
+				{
+					// コマンドライン引数にプロファイルフォルダが含まれているか
+					var cmd = GetCommandLine(proc);  // ※下述 API or ManagementObjectSearcher などで取得
+					if (cmd != null && cmd.IndexOf(ProfileDir, StringComparison.OrdinalIgnoreCase) >= 0)
+					{
+						proc.Kill();
+						proc.WaitForExit();
+						Console.WriteLine($"プロセス終了: {proc.ProcessName} (PID: {proc.Id})");
+					}
+				}
+				catch (Exception ex)
+				{
+					Log($"取得失敗/終了失敗: PID={proc.Id}, {ex.Message}");
+				}
+			}
+		}
+
+		private static string GetCommandLine(Process process)
+		{
+			try
+			{
+				using (var searcher = new ManagementObjectSearcher(
+					$"SELECT CommandLine FROM Win32_Process WHERE ProcessId = {process.Id}"))
+				using (var results = searcher.Get())
+				{
+					return results.Cast<ManagementObject>()
+						.Select(mo => mo["CommandLine"]?.ToString())
+						.FirstOrDefault();
+				}
+			}
+			catch
+			{
+				return null;
 			}
 		}
 	}
