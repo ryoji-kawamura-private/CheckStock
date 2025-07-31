@@ -20,7 +20,7 @@ namespace CheckStock
 		private static DiscordSocketClient DiscordClient { get; set; }
 		private static SocketGuildUser[] GuildUsers { get; set; }
 		private static SemaphoreSlim Semaphore { get; } = new SemaphoreSlim(3); // 同時実行数を3に設定
-		private static string ProfileDir { get; } = Path.Combine(Path.GetTempPath(), "puppeteer_");
+		private static string TempProfilePathPrefix { get; } = Path.Combine(Path.GetTempPath(), "puppeteer");
 
 		static async Task Main(string[] args)
 		{
@@ -68,6 +68,9 @@ namespace CheckStock
 			}
 
 			KillChromeProcesses();
+			var tempRoot = Path.GetTempPath(); // 例: C:\Users\ユーザー名\AppData\Local\Temp\
+			DeleteMatchingDirectories(TempProfilePathPrefix);
+
 
 			foreach (UrlElement urlElement in PollingUrlSettings.Urls)
 			{
@@ -81,7 +84,10 @@ namespace CheckStock
 			{
 				await Semaphore.WaitAsync(); // セマフォでリソースを確保
 				var sendedDiscord = false;
-				using (var Browser = await Puppeteer.LaunchAsync(new LaunchOptions { Headless = true, ExecutablePath = ConfigurationManager.AppSettings["ChromePath"], Args = new[] { "--disable-blink-features=AutomationControlled" }, UserDataDir = ProfileDir + Guid.NewGuid() }))
+
+				var tempProfileDir = Path.Combine(TempProfilePathPrefix, Guid.NewGuid().ToString());
+
+				using (var Browser = await Puppeteer.LaunchAsync(new LaunchOptions { Headless = true, ExecutablePath = ConfigurationManager.AppSettings["ChromePath"], Args = new[] { "--disable-blink-features=AutomationControlled" }, UserDataDir = tempProfileDir }))
 				{
 					Console.WriteLine(url);
 					try
@@ -137,6 +143,15 @@ namespace CheckStock
 					finally
 					{
 						await Browser.CloseAsync();
+						try
+						{
+							if (Directory.Exists(tempProfileDir))
+								Directory.Delete(tempProfileDir, true);
+						}
+						catch (Exception ex)
+						{
+							Log($"一時ディレクトリ削除失敗: {tempProfileDir}, {ex.Message}");
+						}
 						Semaphore.Release();
 					}
 				}
@@ -200,6 +215,7 @@ namespace CheckStock
 				Console.Error.WriteLine("Logging failed: " + ex.Message);
 			}
 		}
+
 		private static void KillChromeProcesses()
 		{
 
@@ -209,7 +225,7 @@ namespace CheckStock
 				{
 					// コマンドライン引数にプロファイルフォルダが含まれているか
 					var cmd = GetCommandLine(proc);  // ※下述 API or ManagementObjectSearcher などで取得
-					if (cmd != null && cmd.IndexOf(ProfileDir, StringComparison.OrdinalIgnoreCase) >= 0)
+					if (cmd != null && cmd.IndexOf(TempProfilePathPrefix, StringComparison.OrdinalIgnoreCase) >= 0)
 					{
 						proc.Kill();
 						proc.WaitForExit();
@@ -239,6 +255,31 @@ namespace CheckStock
 			catch
 			{
 				return null;
+			}
+		}
+		private static void DeleteMatchingDirectories(string startsWith)
+		{
+			string parentDir = Path.GetDirectoryName(startsWith);
+			if (string.IsNullOrWhiteSpace(parentDir) || !Directory.Exists(parentDir))
+			{
+				Console.WriteLine($"親ディレクトリが存在しません: {parentDir}");
+				return;
+			}
+
+			foreach (var dir in Directory.GetDirectories(parentDir))
+			{
+				if (dir.StartsWith(startsWith, StringComparison.OrdinalIgnoreCase))
+				{
+					try
+					{
+						Directory.Delete(dir, true);
+						Console.WriteLine($"削除: {dir}");
+					}
+					catch (Exception ex)
+					{
+						Console.WriteLine($"削除失敗: {dir} - {ex.Message}");
+					}
+				}
 			}
 		}
 	}
